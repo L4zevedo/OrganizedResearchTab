@@ -24,16 +24,6 @@ namespace OrganizedResearch
         protected const float yStep = 0.65f;
         protected const float xStep = 1.00f;
 
-        private IEnumerable<ResearchProjectDef> relevantProjects
-        {
-            get
-            {
-                var property = typeof(MainTabWindow_Research)
-                             .GetField("relevantProjects", BindingFlags.Instance | BindingFlags.NonPublic);
-                return (IEnumerable<ResearchProjectDef>)property.GetValue(this);
-            }
-        }
-
         /// <summary>
         /// Custom class constructor.
         /// </summary>
