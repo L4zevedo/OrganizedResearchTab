@@ -20,7 +20,7 @@ namespace OrganizedResearch
         protected const int maxWidth = 9;
         protected const int maxOriginalWidth = 6;
 
-        protected const float yStep = 0.65f;
+        protected const float yStep = 0.63f;
         protected const float xStep = 1.00f;
 
         // holds the layering throughout execution and between instances
