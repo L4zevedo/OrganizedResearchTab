@@ -23,6 +23,9 @@ namespace OrganizedResearch
         protected const float yStep = 0.65f;
         protected const float xStep = 1.00f;
 
+        // holds the layering throughout execution and between instances
+        private static List<List<ResearchProjectDef>> _Layers = null;
+
         /******************************************************************************************
          * 
          * Default constructor
@@ -32,6 +35,13 @@ namespace OrganizedResearch
         public OrganizedResearch()
         {
             Stopwatch sw = new Stopwatch();
+
+            // if we already calculated the layering, no need to do it again
+            // this prevents the game from doing all calculations again when switching colonies/camps
+            if (_Layers != null)
+            {
+                return;
+            }
 
             try
             {
@@ -79,8 +89,8 @@ namespace OrganizedResearch
 
             // step 4 - distribute tasks among hierarchical layers - O(n)?
             int currentLayer = 0; // x axis
-            List<List<ResearchProjectDef>> Layers = new List<List<ResearchProjectDef>>();
-            Layers.Add(new List<ResearchProjectDef>(maxWidth));
+            _Layers = new List<List<ResearchProjectDef>>();
+            _Layers.Add(new List<ResearchProjectDef>(maxWidth));
 
             while (goodTopologicalOrder.Count > 0)
             {
@@ -90,64 +100,64 @@ namespace OrganizedResearch
                 foreach (ResearchProjectDef child in last.requiredByThis ?? Enumerable.Empty<ResearchProjectDef>())
                 {
                     // we don't want a parent in the same layer as its children
-                    if (Layers[currentLayer].Contains(child))
+                    if (_Layers[currentLayer].Contains(child))
                     {
                         sharedLayer = true;
                     }
                 }
 
-                if (Layers[currentLayer].Count >= maxOriginalWidth || sharedLayer)
+                if (_Layers[currentLayer].Count >= maxOriginalWidth || sharedLayer)
                 {
                     currentLayer++;
-                    Layers.Add(new List<ResearchProjectDef>(maxWidth));
+                    _Layers.Add(new List<ResearchProjectDef>(maxWidth));
                 }
 
-                Layers[currentLayer].Add(last);
+                _Layers[currentLayer].Add(last);
                 goodTopologicalOrder.RemoveLast();
             }
             
             // we did layering backwards, let's reverse all
-            foreach (List<ResearchProjectDef> Layer in Layers)
+            foreach (List<ResearchProjectDef> Layer in _Layers)
             {
                 Layer.Reverse();
             }
-            Layers.Reverse();
+            _Layers.Reverse();
 
             // step 4.1 - a very specific heuristic regarding lonely project (no dependencies)
             // since Coffman-Graham tends to generate layerings with thick bases and empty tops
             // we promote projects with no prereqs or "postreqs" one layer up
-            for (int j = 1; j < Layers.Count; j++)
+            for (int j = 1; j < _Layers.Count; j++)
             {
-                for (int i = 0; i < Layers[j].Count; i++)
+                for (int i = 0; i < _Layers[j].Count; i++)
                 {
-                    if (Layers[j][i].prerequisites == null && Layers[j][i].requiredByThis == null && Layers[j-1].Count < maxWidth)
+                    if (_Layers[j][i].prerequisites == null && _Layers[j][i].requiredByThis == null && _Layers[j-1].Count < maxWidth)
                     {
-                        Layers[j-1].Add(Layers[j][i]);
-                        Layers[j].Remove(Layers[j][i]);
+                        _Layers[j-1].Add(_Layers[j][i]);
+                        _Layers[j].Remove(_Layers[j][i]);
                         i--;
                     }
                 }
             }
 
             // step 5 - add dummy nodes to layers, to make edges more visible
-            for (int i = 0; i < Layers.Count - 1; i++) // for all existing layers except the last one
+            for (int i = 0; i < _Layers.Count - 1; i++) // for all existing layers except the last one
             {
-                foreach (ResearchProjectDef current in Layers[i]) // for all projects in a layer
+                foreach (ResearchProjectDef current in _Layers[i]) // for all projects in a layer
                 {
                     ResearchProjectDef currentDummy = null;
                     
                     for (int k = 0; k < (current.requiredByThis?.Count ?? 0); k++ ) // for all "postreqs" of a project
                     {
-                        for (int j = i + 2; j < Layers.Count; j++) // check if they are in layers ahead (long edge)
+                        for (int j = i + 2; j < _Layers.Count; j++) // check if they are in layers ahead (long edge)
                         {
-                            if (Layers[j].Contains(current.requiredByThis[k]) && (Layers[i + 1].Count < maxWidth || currentDummy != null))
+                            if (_Layers[j].Contains(current.requiredByThis[k]) && (_Layers[i + 1].Count < maxWidth || currentDummy != null))
                             { // found the layer with this "postreq" and there is room for a dummy or there already is a dummy
                                 if (currentDummy == null)
                                 {
                                     ResearchProjectDef dummy = new ResearchProjectDef();
                                     dummy.requiredByThis = new List<ResearchProjectDef>();
                                     dummy.defName = "d" + current.defName;
-                                    Layers[i + 1].Insert(0, dummy);
+                                    _Layers[i + 1].Insert(0, dummy);
                                     currentDummy = dummy;
                                 }
                                 currentDummy.requiredByThis.Add(current.requiredByThis[k]);
@@ -161,7 +171,7 @@ namespace OrganizedResearch
             }
 
             // step 6 - minimize edge crossings with vertex ordering within layers
-            Layers = VertexOrderingWithinLayers(Layers);
+            _Layers = VertexOrderingWithinLayers(_Layers);
 
             // step 7 - set X and Y coordinates based off layering
             // trivial assignment
@@ -169,10 +179,10 @@ namespace OrganizedResearch
             // "Fast and Simple Horizontal Coordinate Assignment"
             // by Ulrik Brandes and Boris Köpf
             float x = 0f, y;
-            for (int i = 0; i < Layers.Count; i++)
+            for (int i = 0; i < _Layers.Count; i++)
             {
                 y = 0f;
-                foreach (ResearchProjectDef current in Layers[i])
+                foreach (ResearchProjectDef current in _Layers[i])
                 {
                     current.researchViewX = x;
                     current.researchViewY = y + (yStep / 2.0f) * (float)(i % 2);
