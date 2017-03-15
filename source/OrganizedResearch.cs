@@ -26,6 +26,10 @@ namespace OrganizedResearch
         // holds the layering throughout execution and between instances
         private static List<List<ResearchProjectDef>> _Layers = null;
 
+        // holds the number of iterations necessary for final result
+        private int _iterations;
+
+
         /******************************************************************************************
          * 
          * Default constructor
@@ -171,7 +175,7 @@ namespace OrganizedResearch
             }
 
             // step 6 - minimize edge crossings with vertex ordering within layers
-            _Layers = VertexOrderingWithinLayers(_Layers);
+            VertexOrderingWithinLayers();
 
             // step 7 - set X and Y coordinates based off layering
             // trivial assignment
@@ -333,20 +337,36 @@ namespace OrganizedResearch
          * by Emden R. Gansner et al.
          * 
          ******************************************************************************************/
-        protected List<List<ResearchProjectDef>> VertexOrderingWithinLayers(List<List<ResearchProjectDef>> order)
+        protected void VertexOrderingWithinLayers()
         {
-            List<List<ResearchProjectDef>> best = SaveOrder(order);
-            for (int i = 0; i < 50; i++)
+            List<List<ResearchProjectDef>> best = SaveLayering();
+            bool giveUp = false;
+            bool medianImprove;
+            bool transpImprove;
+
+            for (_iterations = 0; (_iterations < 50) || (!giveUp); _iterations++)
             {
-                WeightedMedian(order, i);
-                Transpose(order);
-                if (CountTotalCrossings(order) < CountTotalCrossings(best))
+                medianImprove = WeightedMedian();
+                transpImprove = Transpose();
+
+                if (medianImprove)
                 {
-                    best = SaveOrder(order);
+                    Log.Message("Median improved in iteration: " + _iterations);
+                }
+
+                if (transpImprove)
+                {
+                    Log.Message("Transpose improved in iteration: " + _iterations);
+                }
+
+                if (CountTotalCrossings(_Layers) < CountTotalCrossings(best))
+                {
+                    best = SaveLayering();
+                    Log.Message("General improvement in iteration: " + _iterations);
                 }
             }
 
-            return best;
+            _Layers = best;
         }
 
 
@@ -356,15 +376,15 @@ namespace OrganizedResearch
          * 
          * 
          ******************************************************************************************/
-        protected List<List<ResearchProjectDef>> SaveOrder(List<List<ResearchProjectDef>> order)
+        protected List<List<ResearchProjectDef>> SaveLayering()
         {
-            List<List<ResearchProjectDef>> Order = order.ListFullCopy();
-            for (int i = 0; i < Order.Count; i++)
+            List<List<ResearchProjectDef>> saved = _Layers.ListFullCopy();
+            for (int i = 0; i < saved.Count; i++)
             {
-                Order[i] = order[i].ListFullCopy();
+                saved[i] = _Layers[i].ListFullCopy();
             }
 
-            return Order;
+            return saved;
         }
 
 
@@ -373,34 +393,50 @@ namespace OrganizedResearch
          * Sweeps the graph, layer by layer, from left to right or right to left depending on the
          * iteration.
          * 
+         * Left to right sweeps tends to put a parent vertex close to its children
+         * 
+         * Right to left sweeps tends to put children close to each other
          * 
          ******************************************************************************************/
-        protected void WeightedMedian(List<List<ResearchProjectDef>> Order, int iteration)
+        protected bool WeightedMedian()
         {
-            if (iteration % 2 == 0)
-            {
-                for (int i = 1; i < Order.Count; i++)
+            bool layerImprove;
+            bool totalImprove = false;
+
+            if (_iterations % 2 == 0)
+            { // sweep layers from left to right
+                for (int i = 1; i < _Layers.Count; i++)
                 {
-                    float[] median = new float[Order[i].Count];
-                    for (int j = 0; j < Order[i].Count; j++)
+                    var median = new List<float>(_Layers[i].Count);
+                    for (int j = 0; j < _Layers[i].Count; j++)
                     {
-                        median[j] = MedianValue(Order[i][j], Order[i - 1], true);
+                        median[j] = MedianValue(_Layers[i][j], _Layers[i - 1], true);
                     }
-                    SortLayer(Order[i], new List<float>(median));
+                    layerImprove = SortLayer(_Layers[i], median);
+                    if (layerImprove)
+                    {
+                        totalImprove = true;
+                    }
                 }
             }
             else
-            {
-                for (int i = Order.Count - 2; i >= 0; i--)
+            { // sweep layers from right to left
+                for (int i = _Layers.Count - 2; i > -1; i--)
                 {
-                    float[] median = new float[Order[i].Count];
-                    for (int j = 0; j < Order[i].Count; j++)
+                    var median = new List<float>(_Layers[i].Count);
+                    for (int j = 0; j < _Layers[i].Count; j++)
                     {
-                        median[j] = MedianValue(Order[i][j], Order[i + 1], false);
+                        median.Insert(j, MedianValue(_Layers[i][j], _Layers[i + 1], false));
                     }
-                    SortLayer(Order[i], new List<float>(median));
+                    layerImprove = SortLayer(_Layers[i], median);
+                    if (layerImprove)
+                    {
+                        totalImprove = true;
+                    }
                 }
             }
+
+            return totalImprove;
         }
 
 
@@ -439,9 +475,9 @@ namespace OrganizedResearch
             }
             else
             {
-                float left = P[m - 1] - P[0];
-                float right = P[numP - 1] - P[m];
-                return (P[m - 1] * right + P[m] * left) / (left + right);
+                float up = P[m - 1] - P[0];
+                float down = P[numP - 1] - P[m];
+                return (P[m - 1] * down + P[m] * up) / (up + down);
             }
         }
 
@@ -462,7 +498,7 @@ namespace OrganizedResearch
                     if (adjacentLayer[i].requiredByThis[j] == vertex)
                     {
                         positions.Add(i);
-                        break;
+                        break; // don't remove this break, or it could cause division by zero in MedianValue()
                     }
                 }
             }
@@ -487,7 +523,7 @@ namespace OrganizedResearch
                     if (vertex.requiredByThis[j] == adjacentLayer[i])
                     {
                         positions.Add(i);
-                        break;
+                        break; // don't remove this break, or it could cause division by zero in MedianValue()
                     }
                 }
             }
@@ -502,29 +538,39 @@ namespace OrganizedResearch
          * 
          * 
          ******************************************************************************************/
-        protected void SortLayer(List<ResearchProjectDef> Order, List<float> median)
+        protected bool SortLayer(List<ResearchProjectDef> currentLayer, List<float> median)
         {
-            for (int i = 0; i < Order.Count; i++)
+            bool improve = false;
+            int min;
+
+            for (int i = 0; i < currentLayer.Count - 1; i++)
             {
-                int min = i;
-                if (median[i] == -1f)
-                { // a value of -1f indicates a fixed vertex
+                min = i;
+                if (median[i] < 0f)
+                { // a negative value  indicates a fixed vertex
                     continue;
                 }
-                for (int j = i + 1; j < Order.Count; j++)
+                for (int j = i + 1; j < currentLayer.Count; j++)
                 {
-                    if (median[j] >= 0f && median[j] < median[min])
+                    if (median[j] > 0f && median[j] < median[min])
                     {
                         min = j;
                     }
                 }
-                float medianMove = median[min];
-                median.RemoveAt(min);
-                median.Insert(i, medianMove);
-                ResearchProjectDef vertexMove = Order[min];
-                Order.RemoveAt(min);
-                Order.Insert(i, vertexMove);
+
+                if (min > i)
+                {
+                    float medianMove = median[min];
+                    median.RemoveAt(min);
+                    median.Insert(i, medianMove);
+                    ResearchProjectDef vertexMove = currentLayer[min];
+                    currentLayer.RemoveAt(min);
+                    currentLayer.Insert(i, vertexMove);
+                    improve = true;
+                }
             }
+
+            return improve;
         }
 
 
@@ -534,30 +580,34 @@ namespace OrganizedResearch
          * 
          * 
          ******************************************************************************************/
-        protected void Transpose(List<List<ResearchProjectDef>> Order)
+        protected bool Transpose()
         {
-            bool improved = true;
+            bool localImprove = true;
+            bool totalImprove = false;
 
-            while (improved)
+            while (localImprove)
             {
-                improved = false;
-                for (int r = 1; r < Order.Count; r++)
+                localImprove = false;
+                for (int r = 1; r < _Layers.Count; r++)
                 {
-                    for (int i = 0; i < Order[r].Count - 1; i++)
+                    for (int i = 0; i < _Layers[r].Count - 1; i++)
                     {
-                        int crossings = CountCrossingsBetweenLayers(Order[r - 1], Order[r]);
-                        SwapInList(Order[r], i, i + 1);
-                        if (crossings > CountCrossingsBetweenLayers(Order[r - 1], Order[r]))
+                        int crossings = CountCrossingsBetweenLayers(_Layers[r - 1], _Layers[r]);
+                        SwapInList(_Layers[r], i, i + 1);
+                        if (crossings > CountCrossingsBetweenLayers(_Layers[r - 1], _Layers[r]))
                         {
-                            improved = true;
+                            localImprove = true;
+                            totalImprove = true;
                         }
                         else
                         {
-                            SwapInList(Order[r], i, i + 1);
+                            SwapInList(_Layers[r], i, i + 1);
                         }
                     }
                 }
             }
+
+            return totalImprove;
         }
 
 
@@ -567,12 +617,12 @@ namespace OrganizedResearch
          * 
          * 
          ******************************************************************************************/
-        protected int CountTotalCrossings(List<List<ResearchProjectDef>> Order)
+        protected int CountTotalCrossings(List<List<ResearchProjectDef>> layering)
         {
             int sum = 0;
-            for (int i = 0; i < Order.Count - 1; i++)
+            for (int i = 0; i < layering.Count - 1; i++)
             {
-                sum += CountCrossingsBetweenLayers(Order[i], Order[i + 1]);
+                sum += CountCrossingsBetweenLayers(layering[i], layering[i + 1]);
             }
             return sum;
         }
