@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Diagnostics;  // Stopwatch
-using System.Reflection;
 
 using UnityEngine;         // Always needed
 //using VerseBase;         // Material/Graphics handling functions are found here
@@ -24,9 +23,12 @@ namespace OrganizedResearch
         protected const float yStep = 0.65f;
         protected const float xStep = 1.00f;
 
-        /// <summary>
-        /// Custom class constructor.
-        /// </summary>
+        /******************************************************************************************
+         * 
+         * Default constructor
+         * 
+         * 
+         ******************************************************************************************/
         public OrganizedResearch()
         {
             Stopwatch sw = new Stopwatch();
@@ -52,10 +54,16 @@ namespace OrganizedResearch
             }
         }
 
-        /// <summary>
-        /// Run the whole Sugiyama framework style drawing.
-        /// </summary>
-        /// <param name="topologicalOrder"></param>
+
+        /******************************************************************************************
+         * 
+         * Runs the whole Sugiyama framework style drawing.
+         * 
+         * Based on paper:
+         * "Methods for Visual Understanding of Hierarchical System Structures"
+         * by Kozo Sugiyama
+         * 
+         ******************************************************************************************/
         protected void organizeResearchTab(List<ResearchProjectDef> topologicalOrder)
         {
             // step 1 - enforce topological order - O(n^2)ish
@@ -156,8 +164,10 @@ namespace OrganizedResearch
             Layers = VertexOrderingWithinLayers(Layers);
 
             // step 7 - set X and Y coordinates based off layering
-
-
+            // trivial assignment
+            // TODO better assignment based off:
+            // "Fast and Simple Horizontal Coordinate Assignment"
+            // by Ulrik Brandes and Boris Köpf
             float x = 0f, y;
             for (int i = 0; i < Layers.Count; i++)
             {
@@ -173,10 +183,15 @@ namespace OrganizedResearch
             
         }
 
-        /// <summary>
-        /// STEP 1 - Enforce basic topological ordering of a list and populate requiredByThis of each vertex for easier navigation.
-        /// </summary>
-        /// <param name="topologicalOrder"></param>
+        /******************************************************************************************
+         * 
+         * STEP 1
+         * 
+         * Enforce basic topological ordering of a list and populate requiredByThis of each vertex
+         * for easier navigation.
+         * 
+         * 
+         ******************************************************************************************/
         protected void EnforceTopologicalOrdering(List<ResearchProjectDef> topologicalOrder)
         {
             foreach (ResearchProjectDef current in topologicalOrder)
@@ -199,11 +214,19 @@ namespace OrganizedResearch
             }
         }
 
-        /// <summary>
-        /// STEP 3 - Generate a topological ordering according to Coffman-Graham algorithm.
-        /// </summary>
-        /// <param name="topologicalOrder"></param>
-        /// <returns></returns>
+        /******************************************************************************************
+         * 
+         * STEP 3
+         * 
+         * Generate a topological ordering according to Coffman-Graham algorithm.
+         * 
+         * Based on:
+         * "Hierarchical Drawing Algorithms"
+         * by Patrick Healy and Nikola S. Nikolov
+         * 
+         * https://cs.brown.edu/~rt/gdhandbook/chapters/hierarchical.pdf
+         * 
+         ******************************************************************************************/
         protected List<ResearchProjectDef> CoffmanGrahamOrdering(List<ResearchProjectDef> topologicalOrder)
         {
             List<ResearchProjectDef> goodTopologicalOrder = new List<ResearchProjectDef>(topologicalOrder.Count);
@@ -286,11 +309,20 @@ namespace OrganizedResearch
         }
 
 
-        /// <summary>
-        /// STEP 6
-        /// </summary>
-        /// <param name="order"></param>
-        /// <returns></returns>
+
+        /******************************************************************************************
+         * 
+         * STEP 6
+         * 
+         * Reorders vertices withing layers according to two heuristics:
+         *     - Median value of neighboring layers
+         *     - Permutations
+         *     
+         * Based on the paper:
+         * "A Technique for Drawing Directed Graphs"
+         * by Emden R. Gansner et al.
+         * 
+         ******************************************************************************************/
         protected List<List<ResearchProjectDef>> VertexOrderingWithinLayers(List<List<ResearchProjectDef>> order)
         {
             List<List<ResearchProjectDef>> best = SaveOrder(order);
@@ -307,11 +339,13 @@ namespace OrganizedResearch
             return best;
         }
 
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="order"></param>
-        /// <returns></returns>
+
+        /******************************************************************************************
+         * 
+         * Saves the current state of the graph.
+         * 
+         * 
+         ******************************************************************************************/
         protected List<List<ResearchProjectDef>> SaveOrder(List<List<ResearchProjectDef>> order)
         {
             List<List<ResearchProjectDef>> Order = order.ListFullCopy();
@@ -323,11 +357,14 @@ namespace OrganizedResearch
             return Order;
         }
 
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="Order"></param>
-        /// <param name="iteration"></param>
+
+        /******************************************************************************************
+         * 
+         * Sweeps the graph, layer by layer, from left to right or right to left depending on the
+         * iteration.
+         * 
+         * 
+         ******************************************************************************************/
         protected void WeightedMedian(List<List<ResearchProjectDef>> Order, int iteration)
         {
             if (iteration % 2 == 0)
@@ -356,13 +393,13 @@ namespace OrganizedResearch
             }
         }
 
-        /// <summary>
-        /// Calculate a median value for a vertex in relation to the layer to the left or right.
-        /// </summary>
-        /// <param name="vertex"></param>
-        /// <param name="adjacentLayer"></param>
-        /// <param name="leftToRight"></param>
-        /// <returns></returns>
+
+        /******************************************************************************************
+         * 
+         * Calculate a median value for a vertex in relation to the layer to the left or right.
+         * 
+         * 
+         ******************************************************************************************/
         protected float MedianValue(ResearchProjectDef vertex, List<ResearchProjectDef> adjacentLayer, bool toTheLeft)
         {
             int[] P;
@@ -398,12 +435,13 @@ namespace OrganizedResearch
             }
         }
 
-        /// <summary>
-        /// Generate a array of positions of neighbors of a vertex in the layer to the left.
-        /// </summary>
-        /// <param name="vertex"></param>
-        /// <param name="adjacentLayer"></param>
-        /// <returns></returns>
+
+        /******************************************************************************************
+         * 
+         * Generate an array of positions of neighbors of a vertex in the layer to the left.
+         * 
+         * 
+         ******************************************************************************************/
         protected int[] AdjacentPositionsToTheLeft(ResearchProjectDef vertex, List<ResearchProjectDef> adjacentLayer)
         {
             List<int> positions = new List<int>();
@@ -422,12 +460,13 @@ namespace OrganizedResearch
             return positions.ToArray();
         }
 
-        /// <summary>
-        /// Generate a array of positions of neighbors of a vertex in the layer to the right.
-        /// </summary>
-        /// <param name="vertex"></param>
-        /// <param name="adjacentLayer"></param>
-        /// <returns></returns>
+
+        /******************************************************************************************
+         * 
+         * Generate an array of positions of neighbors of a vertex in the layer to the right.
+         * 
+         * 
+         ******************************************************************************************/
         protected int[] AdjacentPositionsToTheRight(ResearchProjectDef vertex, List<ResearchProjectDef> adjacentLayer)
         {
             List<int> positions = new List<int>();
@@ -446,11 +485,13 @@ namespace OrganizedResearch
             return positions.ToArray();
         }
 
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="Order"></param>
-        /// <param name="median"></param>
+
+        /******************************************************************************************
+         * 
+         * Selection sorts a layers based off some previously calculated median.
+         * 
+         * 
+         ******************************************************************************************/
         protected void SortLayer(List<ResearchProjectDef> Order, List<float> median)
         {
             for (int i = 0; i < Order.Count; i++)
@@ -476,10 +517,13 @@ namespace OrganizedResearch
             }
         }
 
-        /// <summary>
-        /// The transposition heuristic for reducing edge crossings.
-        /// </summary>
-        /// <param name="Order"></param>
+
+        /******************************************************************************************
+         * 
+         * The transposition heuristic for reducing edge crossings.
+         * 
+         * 
+         ******************************************************************************************/
         protected void Transpose(List<List<ResearchProjectDef>> Order)
         {
             bool improved = true;
@@ -506,11 +550,13 @@ namespace OrganizedResearch
             }
         }
 
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="Order"></param>
-        /// <returns></returns>
+
+        /******************************************************************************************
+         * 
+         * Counts all edge crossings in the whole graph.
+         * 
+         * 
+         ******************************************************************************************/
         protected int CountTotalCrossings(List<List<ResearchProjectDef>> Order)
         {
             int sum = 0;
@@ -521,13 +567,16 @@ namespace OrganizedResearch
             return sum;
         }
 
-        /// <summary>
-        /// Counts crossing between tight edges on adjacent layers according to the algorithm described in the paper:
-        /// "Counting edge crossings in a 2-layered drawing" by Hiroshi Nagamochi
-        /// </summary>
-        /// <param name="layerA">Fixed layer</param>
-        /// <param name="layerB">Permuted layer</param>
-        /// <returns></returns>
+
+        /******************************************************************************************
+         * 
+         * Counts crossing between tight edges on adjacent layers.
+         * 
+         * Based on the paper:
+         * "Counting edge crossings in a 2-layered drawing"
+         * by Hiroshi Nagamochi
+         * 
+         ******************************************************************************************/
         protected int CountCrossingsBetweenLayers(List<ResearchProjectDef> layerA, List<ResearchProjectDef> layerB)
         {
             int sum = 0;
@@ -548,14 +597,13 @@ namespace OrganizedResearch
             return sum;
         }
 
-        /// <summary>
-        /// Count the amount of edges in a range of vertices pertinent of two adjacent layers.
-        /// </summary>
-        /// <param name="layerA"></param>
-        /// <param name="layerB"></param>
-        /// <param name="layerAindex"></param>
-        /// <param name="layerBindex"></param>
-        /// <returns></returns>
+
+        /******************************************************************************************
+         * 
+         * Count the amount of edges in a range of vertices pertinent of two adjacent layers.
+         * 
+         * 
+         ******************************************************************************************/
         protected int CountEdgesInRange(List<ResearchProjectDef> layerA, List<ResearchProjectDef> layerB, int layerAindex, int layerBindex)
         {
             int sum = 0;
@@ -577,13 +625,13 @@ namespace OrganizedResearch
             return sum;
         }
 
-        /// <summary>
-        /// Simple swap of vertices in a list.
-        /// </summary>
-        /// <typeparam name="T"></typeparam>
-        /// <param name="list"></param>
-        /// <param name="indexA"></param>
-        /// <param name="indexB"></param>
+
+        /******************************************************************************************
+         * 
+         * Simple swap of vertices in a list.
+         * 
+         * 
+         ******************************************************************************************/
         private void SwapInList<T>(List<T> list, int indexA, int indexB)
         {
             T tmp = list[indexA];
@@ -599,10 +647,13 @@ namespace OrganizedResearch
             }
         }
 
-        /// <summary>
-        /// Debug method to print the topological ordering of a list of vertices.
-        /// </summary>
-        /// <param name="list"></param>
+
+        /******************************************************************************************
+         * 
+         * Debug method to print the topological ordering of a list of vertices.
+         * 
+         * 
+         ******************************************************************************************/
         private void PrintTopologicalOrdering(List<ResearchProjectDef> list)
         {
             foreach (ResearchProjectDef current in list)
@@ -616,12 +667,13 @@ namespace OrganizedResearch
             }
         }
 
-        /// <summary>
-        /// Debug method to print the state of tight edges between adjacent layers.
-        /// </summary>
-        /// <param name="Layer"></param>
-        /// <param name="nextLayer"></param>
-        /// <param name="index"></param>
+
+        /******************************************************************************************
+         * 
+         *  Debug method to print the state of tight edges between adjacent layers.
+         * 
+         * 
+         ******************************************************************************************/
         private void PrintLayerAndTightEdges(List<ResearchProjectDef> Layer, List<ResearchProjectDef> nextLayer, int index)
         {
             Log.Message("Layer " + index);
