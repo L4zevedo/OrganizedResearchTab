@@ -1,35 +1,53 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Diagnostics;  // Stopwatch
+﻿/* Lucas Azevedo
+ * v1.1
+ * - Calculations are now done in a separate thread, so impact in loading time should now be minimal
+ */
 
-using UnityEngine;         // Always needed
-//using VerseBase;         // Material/Graphics handling functions are found here
-using Verse;               // RimWorld universal objects are here (like 'Building')
-//using Verse.AI;          // Needed when you do something with the AI
-//using Verse.Sound;       // Needed when you do something with Sound
-//using Verse.Noise;       // Needed when you do something with Noises
-using RimWorld;            // RimWorld specific functions are found here (like 'Building_Battery')
-//using RimWorld.Planet;   // RimWorld specific functions for world creation
-//using RimWorld.SquadAI;  // RimWorld specific functions for squad brains
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Reflection;
+
+using UnityEngine;
+using RimWorld;            // RimWorld specific functions are found here
+using Verse;               // RimWorld universal objects are here
+using Verse.Sound;
+
+using Harmony;
 
 namespace OrganizedResearch
 {
     public class OrganizedResearch : MainTabWindow_Research
     {
-        protected const int maxWidth = 9;
-        protected const int maxOriginalWidth = 6;
+        #region Fields
+        Thread _thread;
 
-        protected const float yStep = 0.65f;
-        protected const float xStep = 1.00f;
+        bool noBenchWarned = true;
+
+        Traverse thisTab;
+        Traverse relevantProjectsField;
+        List<ResearchProjectDef> _relevantProjects;
+        Traverse selectedProjectField;
+        ResearchProjectDef _selectedProject;
+
+        MethodInfo DrawLeftRectInfo;
+
+        const float LayerWidth   = 220f;
+        const float LayerHeight  = 75f;
+        const float VertexWidth  = 150f;
+        const float VertexHeight = 50f;
 
         // holds the layering throughout execution and between instances
-        private static List<List<ResearchProjectDef>> _Layers = null;
+        static Layering _layering = null;
 
-        // holds the number of iterations necessary for final result
-        private int _iterations;
+        static bool _coordsTransfer = false;
 
+        static Vector2 _ScrollPosition = default(Vector2);
 
+        //static bool debuggin = false;
+        #endregion
+
+        #region Constructors
         /******************************************************************************************
          * 
          * Default constructor
@@ -38,717 +56,266 @@ namespace OrganizedResearch
          ******************************************************************************************/
         public OrganizedResearch()
         {
-            Stopwatch sw = new Stopwatch();
+            // helps deal with private methods/fields
+            thisTab = Traverse.Create(this);
+            relevantProjectsField = thisTab.Field("relevantProjects");
+            selectedProjectField = thisTab.Field("selectedProject");
+            DrawLeftRectInfo = typeof(MainTabWindow_Research).GetMethod("DrawLeftRect", BindingFlags.Instance | BindingFlags.NonPublic);
 
             // if we already calculated the layering, no need to do it again
             // this prevents the game from doing all calculations again when switching colonies/camps
-            if (_Layers != null)
+            if (_layering == null)
             {
-                return;
-            }
-
-            try
-            {
-                sw.Start();
-
-                List<ResearchProjectDef> topologicalOrder = DefDatabase<ResearchProjectDef>.AllDefsListForReading.ListFullCopy();
-                organizeResearchTab(topologicalOrder);
-                
-                sw.Stop();
-                Log.Message(sw.ElapsedMilliseconds + "ms organizing Research Tab.");
-            }
-            catch (Exception e)
-            {
-                Log.Error("OrganizedResearch: unidentified error.");
-                Log.Notify_Exception(e);
-            }
-            finally
-            {
-                ResearchProjectDef.GenerateNonOverlappingCoordinates();
+                _layering = new Layering(DefDatabase<ResearchProjectDef>.AllDefsListForReading);
+                _thread = new Thread(new ThreadStart(_layering.OrganizeResearchTab));
+                _thread.Start();
             }
         }
+        #endregion
 
-
+        #region Method Override
         /******************************************************************************************
          * 
-         * Runs the whole Sugiyama framework style drawing.
-         * 
-         * Based on paper:
-         * "Methods for Visual Understanding of Hierarchical System Structures"
-         * by Kozo Sugiyama
-         * 
-         ******************************************************************************************/
-        protected void organizeResearchTab(List<ResearchProjectDef> topologicalOrder)
-        {
-            // step 1 - enforce topological order - O(n^2)ish
-            // also, populate requiredByThis to make layering easier
-            EnforceTopologicalOrdering(topologicalOrder);
-
-            // step 2 - transitive reduction (TODO if necessary)
-
-            // step 3 - find a topological order compliant with Coffman–Graham algorithm - O(n^2)
-            List<ResearchProjectDef> goodTopologicalOrder = CoffmanGrahamOrdering(topologicalOrder);
-            
-            //PrintOrder(goodTopologicalOrder);
-
-            // step 4 - distribute tasks among hierarchical layers - O(n)?
-            int currentLayer = 0; // x axis
-            _Layers = new List<List<ResearchProjectDef>>();
-            _Layers.Add(new List<ResearchProjectDef>(maxWidth));
-
-            while (goodTopologicalOrder.Count > 0)
-            {
-                ResearchProjectDef last = goodTopologicalOrder.Last();
-
-                bool sharedLayer = false;
-                foreach (ResearchProjectDef child in last.requiredByThis ?? Enumerable.Empty<ResearchProjectDef>())
-                {
-                    // we don't want a parent in the same layer as its children
-                    if (_Layers[currentLayer].Contains(child))
-                    {
-                        sharedLayer = true;
-                    }
-                }
-
-                if (_Layers[currentLayer].Count >= maxOriginalWidth || sharedLayer)
-                {
-                    currentLayer++;
-                    _Layers.Add(new List<ResearchProjectDef>(maxWidth));
-                }
-
-                _Layers[currentLayer].Add(last);
-                goodTopologicalOrder.RemoveLast();
-            }
-            
-            // we did layering backwards, let's reverse all
-            foreach (List<ResearchProjectDef> Layer in _Layers)
-            {
-                Layer.Reverse();
-            }
-            _Layers.Reverse();
-
-            // step 4.1 - a very specific heuristic regarding lonely project (no dependencies)
-            // since Coffman-Graham tends to generate layerings with thick bases and empty tops
-            // we promote projects with no prereqs or "postreqs" one layer up
-            for (int j = 1; j < _Layers.Count; j++)
-            {
-                for (int i = 0; i < _Layers[j].Count; i++)
-                {
-                    if (_Layers[j][i].prerequisites == null && _Layers[j][i].requiredByThis == null && _Layers[j-1].Count < maxWidth)
-                    {
-                        _Layers[j-1].Add(_Layers[j][i]);
-                        _Layers[j].Remove(_Layers[j][i]);
-                        i--;
-                    }
-                }
-            }
-
-            // step 5 - add dummy nodes to layers, to make edges more visible
-            for (int i = 0; i < _Layers.Count - 1; i++) // for all existing layers except the last one
-            {
-                foreach (ResearchProjectDef current in _Layers[i]) // for all projects in a layer
-                {
-                    ResearchProjectDef currentDummy = null;
-                    
-                    for (int k = 0; k < (current.requiredByThis?.Count ?? 0); k++ ) // for all "postreqs" of a project
-                    {
-                        for (int j = i + 2; j < _Layers.Count; j++) // check if they are in layers ahead (long edge)
-                        {
-                            if (_Layers[j].Contains(current.requiredByThis[k]) && (_Layers[i + 1].Count < maxWidth || currentDummy != null))
-                            { // found the layer with this "postreq" and there is room for a dummy or there already is a dummy
-                                if (currentDummy == null)
-                                {
-                                    ResearchProjectDef dummy = new ResearchProjectDef();
-                                    dummy.requiredByThis = new List<ResearchProjectDef>();
-                                    dummy.defName = "d" + current.defName;
-                                    _Layers[i + 1].Insert(0, dummy);
-                                    currentDummy = dummy;
-                                }
-                                currentDummy.requiredByThis.Add(current.requiredByThis[k]);
-                                current.requiredByThis.Add(currentDummy); 
-
-                                //break; // we found the layer where the "postreq" is, stop looking
-                            }
-                        }
-                    }
-                }
-            }
-
-            // step 6 - minimize edge crossings with vertex ordering within layers
-            VertexOrderingWithinLayers();
-
-            // step 7 - set X and Y coordinates based off layering
-            // trivial assignment
-            // TODO better assignment based off:
-            // "Fast and Simple Horizontal Coordinate Assignment"
-            // by Ulrik Brandes and Boris Köpf
-            float x = 0f, y;
-            for (int i = 0; i < _Layers.Count; i++)
-            {
-                y = 0f;
-                foreach (ResearchProjectDef current in _Layers[i])
-                {
-                    current.researchViewX = x;
-                    current.researchViewY = y + (yStep / 2.0f) * (float)(i % 2);
-                    y += yStep;
-                }
-                x += xStep;
-            }
-            
-        }
-
-        /******************************************************************************************
-         * 
-         * STEP 1
-         * 
-         * Enforce basic topological ordering of a list and populate requiredByThis of each vertex
-         * for easier navigation.
+         * PreOpen override
          * 
          * 
          ******************************************************************************************/
-        protected void EnforceTopologicalOrdering(List<ResearchProjectDef> topologicalOrder)
+        public override void PreOpen()
         {
-            foreach (ResearchProjectDef current in topologicalOrder)
-            {
-                foreach (ResearchProjectDef dependency in current.prerequisites ?? Enumerable.Empty<ResearchProjectDef>())
-                {
-                    int index = topologicalOrder.IndexOf(dependency);
-                    int index2 = topologicalOrder.IndexOf(current);
-                    if (index > index2)
-                    {
-                        SwapInList(topologicalOrder, index, index2);
-                    }
+            base.PreOpen();
 
-                    if (dependency.requiredByThis == null)
-                    {
-                        dependency.requiredByThis = new List<ResearchProjectDef>();
-                    }
-                    dependency.requiredByThis.Add(current);
-                }
+            // set to topleft (for some reason vanilla alignment overlaps bottom buttons)
+            // from Fluffy's Research Tree
+            windowRect.x = 0f;
+            windowRect.y = 200f;
+            windowRect.width = Screen.width;
+            windowRect.height = Screen.height - 235f;
+
+            if (!_coordsTransfer)
+            {
+                _thread.Join();
+                _layering.TransferCoordinates(DefDatabase<ResearchProjectDef>.AllDefsListForReading);
+                _coordsTransfer = true;
             }
         }
 
         /******************************************************************************************
          * 
-         * STEP 3
+         * DoWindowContents override
          * 
-         * Generate a topological ordering according to Coffman-Graham algorithm.
-         * 
-         * Based on:
-         * "Hierarchical Drawing Algorithms"
-         * by Patrick Healy and Nikola S. Nikolov
-         * 
-         * https://cs.brown.edu/~rt/gdhandbook/chapters/hierarchical.pdf
          * 
          ******************************************************************************************/
-        protected List<ResearchProjectDef> CoffmanGrahamOrdering(List<ResearchProjectDef> topologicalOrder)
+        public override void DoWindowContents(Rect inRect)
         {
-            List<ResearchProjectDef> goodTopologicalOrder = new List<ResearchProjectDef>(topologicalOrder.Count);
-
-            while (topologicalOrder.Count > 0)
+            if (!noBenchWarned)
             {
-                ResearchProjectDef selected = topologicalOrder.First();
-
-                foreach (ResearchProjectDef current in topologicalOrder)
+                bool flag = false;
+                List<Map> maps = Find.Maps;
+                for (int i = 0; i < maps.Count; i++)
                 {
-                    if (selected == current) continue;
-
-                    if (current.prerequisites == null)
+                    if (maps[i].listerBuildings.ColonistsHaveResearchBench())
                     {
-                        if (selected.prerequisites == null)
-                        {
-                            if (current.techLevel < selected.techLevel)
-                            {
-                                selected = current;
-                            }
-                        }
-                        else
-                        {
-                            selected = current;
-                        }
-                    }
-                    else
-                    {
-                        if (selected.prerequisites == null) break;
-
-                        bool eligible = true;
-                        foreach (ResearchProjectDef currentPR in current.prerequisites)
-                        {
-                            if (!goodTopologicalOrder.Contains(currentPR))
-                            {
-                                eligible = false;
-                            }
-                        }
-
-                        if (selected.prerequisites != null && eligible)
-                        {
-                            List<int> selectedPRMax = new List<int>();
-                            List<int> currentPRMax = new List<int>();
-                            foreach (ResearchProjectDef selectedPR in selected.prerequisites)
-                            {
-                                selectedPRMax.Add(goodTopologicalOrder.IndexOf(selectedPR));
-                            }
-                            selectedPRMax.Sort(); selectedPRMax.Reverse();
-                            foreach (ResearchProjectDef currentPR in current.prerequisites)
-                            {
-                                currentPRMax.Add(goodTopologicalOrder.IndexOf(currentPR));
-                            }
-                            currentPRMax.Sort(); currentPRMax.Reverse();
-
-                            int i;
-                            for (i = 0; i < selectedPRMax.Count && i < currentPRMax.Count; i++)
-                            {
-                                if (selectedPRMax[i] > currentPRMax[i])
-                                {
-                                    selected = current;
-                                    break;
-                                }
-                                else if (selectedPRMax[i] < currentPRMax[i])
-                                {
-                                    break;
-                                }
-                            }
-                            if (i < selectedPRMax.Count && i == currentPRMax.Count)
-                            {
-                                selected = current;
-                            }
-                        }
+                        flag = true;
+                        break;
                     }
                 }
-                goodTopologicalOrder.Add(selected);
-                topologicalOrder.Remove(selected);
+                if (!flag)
+                {
+                    Find.WindowStack.Add(new Dialog_MessageBox("ResearchMenuWithoutBench".Translate(), null, null, null, null, null, false));
+                }
+                noBenchWarned = true;
             }
-
-            return goodTopologicalOrder;
+            float num = 0f;
+            Text.Anchor = TextAnchor.UpperLeft;
+            Text.Font = GameFont.Small;
+            Rect leftOutRect = new Rect(0f, num, 200f, inRect.height - num);
+            Rect rect = new Rect(leftOutRect.xMax + 10f, num, inRect.width - leftOutRect.width - 10f, inRect.height - num);
+            Widgets.DrawMenuSection(rect, true);
+            //thisTab.Method("DrawLeftRect").GetValue<void>(leftOutRect);
+            DrawLeftRectInfo.Invoke(this, new object[] { leftOutRect });
+            DrawRightRect(rect);
         }
 
+        #endregion
 
-
+        #region Own Methods
         /******************************************************************************************
          * 
-         * STEP 6
+         * DrawRightRect Prefix
          * 
-         * Reorders vertices withing layers according to two heuristics:
-         *     - Median value of neighboring layers
-         *     - Permutations
-         *     
-         * Based on the paper:
-         * "A Technique for Drawing Directed Graphs"
-         * by Emden R. Gansner et al.
+         * Heavily edited copy/paste from decompiled original 
+         * 
          * 
          ******************************************************************************************/
-        protected void VertexOrderingWithinLayers()
+        void DrawRightRect(Rect rightOutRect)
         {
-            List<List<ResearchProjectDef>> best = SaveLayering();
-            bool giveUp = false;
-            bool medianImprove;
-            bool transpImprove;
+            _relevantProjects = relevantProjectsField.GetValue<List<ResearchProjectDef>>();
+            _selectedProject = selectedProjectField.GetValue<ResearchProjectDef>();
 
-            for (_iterations = 0; (_iterations < 50) || (!giveUp); _iterations++)
+            float viewWidth = _layering.maxX * LayerWidth;
+
+            Rect outRect = rightOutRect.ContractedBy(10f);
+            Rect rect = new Rect(0f, 0f, viewWidth, outRect.height - 16f);
+            Rect position = rect.ContractedBy(10f);
+            rect.width = viewWidth;
+            position = rect.ContractedBy(10f);
+            Widgets.ScrollHorizontal(outRect, ref _ScrollPosition, rect);
+            Widgets.BeginScrollView(outRect, ref _ScrollPosition, rect);
+            GUI.BeginGroup(position);
+
+            //DEBUG
+            //if (debuggin)
+            //{
+            //    Log.Message("relevant projects: " + _relevantProjects.Count);
+            //    Log.Message("vertices: " + _layering.vertices.Count);
+            //    debuggin = false;
+            //}
+
+            Vector2 start;
+            Vector2 end;
+            // draws the relationship lines
+            foreach (Vertex v in _layering.vertices)
             {
-                medianImprove = WeightedMedian();
-                transpImprove = Transpose();
-
-                if (medianImprove)
+                foreach (Vertex vParent in v.parents)
                 {
-                    Log.Message("Median improved in iteration: " + _iterations);
-                }
-
-                if (transpImprove)
-                {
-                    Log.Message("Transpose improved in iteration: " + _iterations);
-                }
-
-                if (CountTotalCrossings(_Layers) < CountTotalCrossings(best))
-                {
-                    best = SaveLayering();
-                    Log.Message("General improvement in iteration: " + _iterations);
-                }
-            }
-
-            _Layers = best;
-        }
-
-
-        /******************************************************************************************
-         * 
-         * Saves the current state of the graph.
-         * 
-         * 
-         ******************************************************************************************/
-        protected List<List<ResearchProjectDef>> SaveLayering()
-        {
-            List<List<ResearchProjectDef>> saved = _Layers.ListFullCopy();
-            for (int i = 0; i < saved.Count; i++)
-            {
-                saved[i] = _Layers[i].ListFullCopy();
-            }
-
-            return saved;
-        }
-
-
-        /******************************************************************************************
-         * 
-         * Sweeps the graph, layer by layer, from left to right or right to left depending on the
-         * iteration.
-         * 
-         * Left to right sweeps tends to put a parent vertex close to its children
-         * 
-         * Right to left sweeps tends to put children close to each other
-         * 
-         ******************************************************************************************/
-        protected bool WeightedMedian()
-        {
-            bool layerImprove;
-            bool totalImprove = false;
-
-            if (_iterations % 2 == 0)
-            { // sweep layers from left to right
-                for (int i = 1; i < _Layers.Count; i++)
-                {
-                    var median = new List<float>(_Layers[i].Count);
-                    for (int j = 0; j < _Layers[i].Count; j++)
+                    start.x = v.x * LayerWidth;
+                    start.y = v.y * LayerHeight + (VertexHeight / 2f);
+                    end.x = vParent.x * LayerWidth + VertexWidth;
+                    end.y = vParent.y * LayerHeight + VertexHeight / 2f;
+                    Widgets.DrawLine(start, end, TexUI.DefaultLineResearchColor, 2f);
+                    if (vParent.isDummy)
                     {
-                        median[j] = MedianValue(_Layers[i][j], _Layers[i - 1], true);
-                    }
-                    layerImprove = SortLayer(_Layers[i], median);
-                    if (layerImprove)
-                    {
-                        totalImprove = true;
-                    }
-                }
-            }
-            else
-            { // sweep layers from right to left
-                for (int i = _Layers.Count - 2; i > -1; i--)
-                {
-                    var median = new List<float>(_Layers[i].Count);
-                    for (int j = 0; j < _Layers[i].Count; j++)
-                    {
-                        median.Insert(j, MedianValue(_Layers[i][j], _Layers[i + 1], false));
-                    }
-                    layerImprove = SortLayer(_Layers[i], median);
-                    if (layerImprove)
-                    {
-                        totalImprove = true;
+                        start.x = end.x - VertexWidth;
+                        start.y = end.y;
+                        Widgets.DrawLine(start, end, TexUI.DefaultLineResearchColor, 2f);
                     }
                 }
             }
 
-            return totalImprove;
-        }
+            // draw highlighted lines for selected project
+            Vertex selected = _layering.MapProjectVertex[_selectedProject];
+            DrawChildrenEdges(selected);
+            DrawParentEdges(selected);
 
-
-        /******************************************************************************************
-         * 
-         * Calculate a median value for a vertex in relation to the layer to the left or right.
-         * 
-         * 
-         ******************************************************************************************/
-        protected float MedianValue(ResearchProjectDef vertex, List<ResearchProjectDef> adjacentLayer, bool toTheLeft)
-        {
-            int[] P;
-
-            if (toTheLeft)
+            //draws each project box
+            foreach (Vertex v in _layering.vertices)
             {
-                P = AdjacentPositionsToTheLeft(vertex, adjacentLayer);
-            }
-            else
-            {
-                P = AdjacentPositionsToTheRight(vertex, adjacentLayer); 
-            }
-                            
-            int numP = P.Count();
-            int m = numP / 2;
-            if (numP == 0)
-            {
-                return -1f;
-            }
-            else if (numP % 2 == 1)
-            {
-                return P[m];
-            }
-            else if (numP == 2)
-            {
-                return (P[0] + P[1]) / 2f;
-            }
-            else
-            {
-                float up = P[m - 1] - P[0];
-                float down = P[numP - 1] - P[m];
-                return (P[m - 1] * down + P[m] * up) / (up + down);
-            }
-        }
-
-
-        /******************************************************************************************
-         * 
-         * Generate an array of positions of neighbors of a vertex in the layer to the left.
-         * 
-         * 
-         ******************************************************************************************/
-        protected int[] AdjacentPositionsToTheLeft(ResearchProjectDef vertex, List<ResearchProjectDef> adjacentLayer)
-        {
-            List<int> positions = new List<int>();
-            for (int i = 0; i < adjacentLayer.Count; i++)
-            {
-                for (int j = 0; j < (adjacentLayer[i].requiredByThis?.Count ?? 0); j++)
+                if (v.isDummy)
                 {
-                    if (adjacentLayer[i].requiredByThis[j] == vertex)
-                    {
-                        positions.Add(i);
-                        break; // don't remove this break, or it could cause division by zero in MedianValue()
-                    }
-                }
-            }
-
-            return positions.ToArray();
-        }
-
-
-        /******************************************************************************************
-         * 
-         * Generate an array of positions of neighbors of a vertex in the layer to the right.
-         * 
-         * 
-         ******************************************************************************************/
-        protected int[] AdjacentPositionsToTheRight(ResearchProjectDef vertex, List<ResearchProjectDef> adjacentLayer)
-        {
-            List<int> positions = new List<int>();
-            for (int i = 0; i < adjacentLayer.Count; i++)
-            {
-                for (int j = 0; j < (vertex.requiredByThis?.Count ?? 0); j++)
-                {
-                    if (vertex.requiredByThis[j] == adjacentLayer[i])
-                    {
-                        positions.Add(i);
-                        break; // don't remove this break, or it could cause division by zero in MedianValue()
-                    }
-                }
-            }
-
-            return positions.ToArray();
-        }
-
-
-        /******************************************************************************************
-         * 
-         * Selection sorts a layers based off some previously calculated median.
-         * 
-         * 
-         ******************************************************************************************/
-        protected bool SortLayer(List<ResearchProjectDef> currentLayer, List<float> median)
-        {
-            bool improve = false;
-            int min;
-
-            for (int i = 0; i < currentLayer.Count - 1; i++)
-            {
-                min = i;
-                if (median[i] < 0f)
-                { // a negative value  indicates a fixed vertex
                     continue;
                 }
-                for (int j = i + 1; j < currentLayer.Count; j++)
+                Rect source = new Rect(v.x * LayerWidth, v.y * LayerHeight, VertexWidth, VertexHeight);
+                string label = v.project.LabelCap + "\n(" + v.project.CostApparent.ToString("F0") + ")";
+                Rect rect2 = new Rect(source);
+                Color textColor = Widgets.NormalOptionColor;
+                Color color = default(Color);
+                Color borderColor = default(Color);
+                bool flag = !v.project.IsFinished && !v.project.CanStartNow;
+                if (v.project == Find.ResearchManager.currentProj)
                 {
-                    if (median[j] > 0f && median[j] < median[min])
+                    color = TexUI.ActiveResearchColor;
+                }
+                else if (v.project.IsFinished)
+                {
+                    color = TexUI.FinishedResearchColor;
+                }
+                else if (flag)
+                {
+                    color = TexUI.LockedResearchColor;
+                }
+                else if (v.project.CanStartNow)
+                {
+                    color = TexUI.AvailResearchColor;
+                }
+                if (_selectedProject == v.project)
+                {
+                    color += TexUI.HighlightBgResearchColor;
+                    borderColor = TexUI.HighlightBorderResearchColor;
+                }
+                else
+                {
+                    borderColor = TexUI.DefaultBorderResearchColor;
+                }
+
+                if (flag)
+                {
+                    textColor = Color.gray;
+                }
+                foreach (Vertex vParent in v.parents)
+                {
+                    if (vParent != null && _selectedProject == vParent.project)
                     {
-                        min = j;
+                        borderColor = TexUI.HighlightLineResearchColor;
+                    }
+                }
+                foreach (Vertex vChild in v.children)
+                {
+                    if (_selectedProject == vChild.project)
+                    {
+                        borderColor = TexUI.HighlightLineResearchColor;
                     }
                 }
 
-                if (min > i)
+                if (Widgets.CustomButtonText(ref rect2, label, color, textColor, borderColor, true, 1, true, true))
                 {
-                    float medianMove = median[min];
-                    median.RemoveAt(min);
-                    median.Insert(i, medianMove);
-                    ResearchProjectDef vertexMove = currentLayer[min];
-                    currentLayer.RemoveAt(min);
-                    currentLayer.Insert(i, vertexMove);
-                    improve = true;
+                    SoundDefOf.Click.PlayOneShotOnCamera();
+                    selectedProjectField.SetValue(v.project);
+                }
+            }
+            GUI.EndGroup();
+            Widgets.EndScrollView();
+        }
+
+
+        /******************************************************************************************
+         * 
+         * Auxiliary drawing methods
+         * 
+         * 
+         ******************************************************************************************/
+        void DrawChildrenEdges(Vertex v)
+        {
+            Vector2 start;
+            Vector2 end;
+            foreach (Vertex child in v.children)
+            {
+                start.x = v.x * LayerWidth + VertexWidth;
+                start.y = v.y * LayerHeight + (VertexHeight / 2f);
+                end.x = child.x * LayerWidth;
+                end.y = child.y * LayerHeight + VertexHeight / 2f;
+                Widgets.DrawLine(start, end, TexUI.HighlightLineResearchColor, 4f);
+                if (child.isDummy)
+                {
+                    start.x = end.x + VertexWidth;
+                    start.y = end.y;
+                    Widgets.DrawLine(start, end, TexUI.HighlightLineResearchColor, 4f);
+                    DrawChildrenEdges(child);
                 }
             }
 
-            return improve;
         }
 
-
-        /******************************************************************************************
-         * 
-         * The transposition heuristic for reducing edge crossings.
-         * 
-         * 
-         ******************************************************************************************/
-        protected bool Transpose()
+        void DrawParentEdges(Vertex v)
         {
-            bool localImprove = true;
-            bool totalImprove = false;
-
-            while (localImprove)
+            Vector2 start;
+            Vector2 end;
+           
+            foreach (Vertex parent in v.parents)
             {
-                localImprove = false;
-                for (int r = 1; r < _Layers.Count; r++)
+                start.x = v.x * LayerWidth;
+                start.y = v.y * LayerHeight + (VertexHeight / 2f);
+                end.x = parent.x * LayerWidth + VertexWidth;
+                end.y = parent.y * LayerHeight + VertexHeight / 2f;
+                Widgets.DrawLine(start, end, TexUI.HighlightLineResearchColor, 4f);
+                if (parent.isDummy)
                 {
-                    for (int i = 0; i < _Layers[r].Count - 1; i++)
-                    {
-                        int crossings = CountCrossingsBetweenLayers(_Layers[r - 1], _Layers[r]);
-                        SwapInList(_Layers[r], i, i + 1);
-                        if (crossings > CountCrossingsBetweenLayers(_Layers[r - 1], _Layers[r]))
-                        {
-                            localImprove = true;
-                            totalImprove = true;
-                        }
-                        else
-                        {
-                            SwapInList(_Layers[r], i, i + 1);
-                        }
-                    }
+                    start.x = end.x - VertexWidth;
+                    start.y = end.y;
+                    Widgets.DrawLine(start, end, TexUI.HighlightLineResearchColor, 4f);
+                    DrawParentEdges(parent);
                 }
             }
-
-            return totalImprove;
         }
-
-
-        /******************************************************************************************
-         * 
-         * Counts all edge crossings in the whole graph.
-         * 
-         * 
-         ******************************************************************************************/
-        protected int CountTotalCrossings(List<List<ResearchProjectDef>> layering)
-        {
-            int sum = 0;
-            for (int i = 0; i < layering.Count - 1; i++)
-            {
-                sum += CountCrossingsBetweenLayers(layering[i], layering[i + 1]);
-            }
-            return sum;
-        }
-
-
-        /******************************************************************************************
-         * 
-         * Counts crossing between tight edges on adjacent layers.
-         * 
-         * Based on the paper:
-         * "Counting edge crossings in a 2-layered drawing"
-         * by Hiroshi Nagamochi
-         * 
-         ******************************************************************************************/
-        protected int CountCrossingsBetweenLayers(List<ResearchProjectDef> layerA, List<ResearchProjectDef> layerB)
-        {
-            int sum = 0;
-
-            layerB.Reverse();
-            for (int i = 1; i < layerA.Count; i++)
-            {
-                for (int j = 1; j < layerB.Count; j++)
-                {
-                    if (layerA[i].requiredByThis?.Contains(layerB[j]) ?? false)
-                    {
-                        sum += CountEdgesInRange(layerA, layerB, i - 1, j - 1);
-                    }
-                }
-            }
-            layerB.Reverse();
-
-            return sum;
-        }
-
-
-        /******************************************************************************************
-         * 
-         * Count the amount of edges in a range of vertices pertinent of two adjacent layers.
-         * 
-         * 
-         ******************************************************************************************/
-        protected int CountEdgesInRange(List<ResearchProjectDef> layerA, List<ResearchProjectDef> layerB, int layerAindex, int layerBindex)
-        {
-            int sum = 0;
-
-            if (layerAindex < 0 || layerBindex < 0)
-            {
-                return 0;
-            }
-
-            sum += CountEdgesInRange(layerA, layerB, layerAindex, layerBindex - 1);
-            sum += CountEdgesInRange(layerA, layerB, layerAindex - 1, layerBindex);
-            sum -= CountEdgesInRange(layerA, layerB, layerAindex - 1, layerBindex - 1);
-
-            if (layerA[layerAindex].requiredByThis?.Contains(layerB[layerBindex]) ?? false)
-            {
-                sum += 1;
-            }
-
-            return sum;
-        }
-
-
-        /******************************************************************************************
-         * 
-         * Simple swap of vertices in a list.
-         * 
-         * 
-         ******************************************************************************************/
-        private void SwapInList<T>(List<T> list, int indexA, int indexB)
-        {
-            T tmp = list[indexA];
-            list[indexA] = list[indexB];
-            list[indexB] = tmp;
-        }
-
-        private void PrintList(List<ResearchProjectDef> list)
-        {
-            foreach (ResearchProjectDef current in list)
-            {
-                Log.Message(current.defName);
-            }
-        }
-
-
-        /******************************************************************************************
-         * 
-         * Debug method to print the topological ordering of a list of vertices.
-         * 
-         * 
-         ******************************************************************************************/
-        private void PrintTopologicalOrdering(List<ResearchProjectDef> list)
-        {
-            foreach (ResearchProjectDef current in list)
-            {
-                Log.Message(current.defName);
-                foreach (ResearchProjectDef dependency in (current.prerequisites ?? Enumerable.Empty<ResearchProjectDef>()))
-                {
-                    Log.Message("   |- " + dependency.defName);
-                }
-                Log.Message("");
-            }
-        }
-
-
-        /******************************************************************************************
-         * 
-         *  Debug method to print the state of tight edges between adjacent layers.
-         * 
-         * 
-         ******************************************************************************************/
-        private void PrintLayerAndTightEdges(List<ResearchProjectDef> Layer, List<ResearchProjectDef> nextLayer, int index)
-        {
-            Log.Message("Layer " + index);
-            for (int i = 0; i < Layer.Count - 1; i++)
-            {
-                Log.Message(Layer[i].defName);
-                foreach (ResearchProjectDef postreq in (Layer[i].requiredByThis ?? Enumerable.Empty<ResearchProjectDef>()))
-                {
-                    if (nextLayer.Contains(postreq))
-                    {
-                        Log.Message("   |- " + postreq.defName);
-                    }
-                }
-                Log.Message("");
-            }
-        }
+        #endregion
     }
 }
