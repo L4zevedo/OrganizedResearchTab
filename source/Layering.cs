@@ -35,11 +35,11 @@ namespace OrganizedResearch
         public Dictionary<ResearchProjectDef, Vertex> MapProjectVertex { get; set; }
 
         // holds the number of iterations necessary for final result
-        public int _iterations { get; set; }
+        public int iterations { get; set; }
 
         public float maxX { get; private set; }
 
-        Stopwatch sw = new Stopwatch();
+        public Stopwatch sw { get; } = new Stopwatch();
         #endregion
 
 
@@ -114,7 +114,6 @@ namespace OrganizedResearch
             // step 7 - set X and Y coordinates based off layering
             AssignCoordinates();
             sw.Stop();
-            Log.Message("Organized Research Tab :: " + _iterations + " iterations :: " + sw.ElapsedMilliseconds + "ms");            
         }
 
         /******************************************************************************************
@@ -440,13 +439,13 @@ namespace OrganizedResearch
             bool generalImprove;
             bool uselessRound = false;
 
-            for (_iterations = 0; (_iterations < 20) && (!uselessRound); _iterations++)
+            for (iterations = 0; (iterations < 20) && (!uselessRound); iterations++)
             {
                 uselessRound = true;
 
                 medianImprove = WeightedMedian();
                 transpImprove = false;
-                if (_iterations > 3)
+                if (iterations > 3)
                 { // using Transpose right from the beginning costs too much
                     transpImprove = Transpose();
                 }
@@ -501,7 +500,7 @@ namespace OrganizedResearch
             bool totalImprove = false;
             var median = new List<float>(maxW);
 
-            if (_iterations % 2 == 0)
+            if (iterations % 2 == 0)
             { // sweep layers from left to right
                 for (int i = 1; i < _layers.Count; i++)
                 {

@@ -5,7 +5,10 @@
   <targetVersion>0.16.1393</targetVersion>
   <description>Organized research projects in the Research Tab.
   
-  Changelog for version 1.1
+  Changelog for version 1.1.1
+  - Fixed an issue that was causing crashes
+  
+  Changelog for version 1.1.0
   - Calculations are now done in a thread separate from Main Thread, so no more impact on loading time
   - Better looks</description>
 </ModMetaData>

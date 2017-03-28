@@ -95,6 +95,7 @@ namespace OrganizedResearch
             {
                 _thread.Join();
                 _layering.TransferCoordinates(DefDatabase<ResearchProjectDef>.AllDefsListForReading);
+                Log.Message("Organized Research Tab :: " + _layering.iterations + " iterations :: " + _layering.sw.ElapsedMilliseconds + "ms");
                 _coordsTransfer = true;
             }
         }
@@ -193,9 +194,12 @@ namespace OrganizedResearch
             }
 
             // draw highlighted lines for selected project
-            Vertex selected = _layering.MapProjectVertex[_selectedProject];
-            DrawChildrenEdges(selected);
-            DrawParentEdges(selected);
+            if (_selectedProject != null)
+            {
+                Vertex selected = _layering.MapProjectVertex[_selectedProject];
+                DrawChildrenEdges(selected);
+                DrawParentEdges(selected);
+            }
 
             //draws each project box
             foreach (Vertex v in _layering.vertices)
