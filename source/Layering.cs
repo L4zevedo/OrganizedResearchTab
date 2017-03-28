@@ -451,14 +451,14 @@ namespace OrganizedResearch
                 }
 
                 generalImprove = false;
-                if (CountTotalCrossings(_layers) < CountTotalCrossings(best))
-                {
-                    generalImprove = true;
-                    best = SaveLayering();
-                }
+                //if (CountTotalCrossings(_layers) < CountTotalCrossings(best))
+                //{
+                //    generalImprove = true;
+                //}
 
                 if (medianImprove || transpImprove || generalImprove)
                 {
+                    best = SaveLayering();
                     uselessRound = false;
                 }
             }
